@@ -1,43 +1,77 @@
 #include <Arduino.h>
 
-// Center 센서 핀 설정
-#define TRIG_PIN 19
-#define ECHO_PIN 23
+// --- 핀 번호 설정 ---
+#define TRIG_L 5
+#define ECHO_L 18
+
+#define TRIG_C 19
+#define ECHO_C 23
+
+#define TRIG_R 32
+#define ECHO_R 33
+
+// 최대 측정 대기 시간 (30ms = 약 5m)
+const long TIMEOUT = 30000;
+
+// 함수: 개별 센서 측정
+float read_sonar(int trigPin, int echoPin, String name) {
+  // 1. Trig 핀 초기화
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  
+  // 2. 발사!
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // 3. 수신 대기
+  long duration = pulseIn(echoPin, HIGH, TIMEOUT);
+  
+  if (duration == 0) {
+    return -1.0; // 측정 실패
+  } else {
+    // cm 단위 변환
+    return (duration * 0.034 / 2);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
   
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIG_L, OUTPUT); pinMode(ECHO_L, INPUT);
+  pinMode(TRIG_C, OUTPUT); pinMode(ECHO_C, INPUT);
+  pinMode(TRIG_R, OUTPUT); pinMode(ECHO_R, INPUT);
   
-  Serial.println("===============================");
-  Serial.println("JSN-SR04T 초음파 센서 테스트");
-  Serial.println("===============================");
+  Serial.println("========================================");
+  Serial.println("Miro 로봇 초음파 3채널 순차 테스트 시작");
+  Serial.println("========================================");
 }
 
 void loop() {
-  // 1. Trig 핀 초기화 (Low 상태 유지)
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
+  float dist_L, dist_C, dist_R;
+
+  // --- 1. 왼쪽 (Left) 측정 ---
+  dist_L = read_sonar(TRIG_L, ECHO_L, "Left");
+  delay(50); // 간섭 방지 대기 (50ms)
+
+  // --- 2. 중앙 (Center) 측정 ---
+  dist_C = read_sonar(TRIG_C, ECHO_C, "Center");
+  delay(50); // 간섭 방지 대기 (50ms)
+
+  // --- 3. 오른쪽 (Right) 측정 ---
+  dist_R = read_sonar(TRIG_R, ECHO_R, "Right");
   
-  // 2. 10us 펄스 발사 (야! 하고 소리지름)
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  
-  // 3. Echo 핀으로 돌아오는 시간 측정 (타임아웃 30ms = 약 5m)
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-  
-  if (duration == 0) {
-    Serial.println("거리 측정 실패 (0cm) - 배선 확인 필요");
-  } else {
-    // 소리 속도 340m/s. 왕복이므로 /2. cm 환산
-    float distance = duration * 0.034 / 2;
-    
-    Serial.print("감지된 거리: ");
-    Serial.print(distance);
-    Serial.println(" cm");
-  }
-  
-  delay(500); // 0.5초마다 측정
+  // --- 결과 출력 ---
+  Serial.print("L: ");
+  if(dist_L == -1) Serial.print("---"); else Serial.print(dist_L, 1);
+  Serial.print(" cm  |  ");
+
+  Serial.print("C: ");
+  if(dist_C == -1) Serial.print("---"); else Serial.print(dist_C, 1);
+  Serial.print(" cm  |  ");
+
+  Serial.print("R: ");
+  if(dist_R == -1) Serial.println("---"); else Serial.println(dist_R, 1);
+
+  delay(200); // 전체 루프 대기
 }
