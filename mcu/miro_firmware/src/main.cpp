@@ -7,7 +7,7 @@
 
 #include <sensor_msgs/msg/imu.h>
 #include <sensor_msgs/msg/range.h>
-
+#include <geometry_msgs/msg/twist.h> 
 #include <MPU9250.h>
 
 // --- 핀 설정 ---
@@ -23,9 +23,11 @@ MPU9250 mpu(Wire, 0x68); // 주소 0x68 확인됨
 
 rcl_publisher_t imu_pub;
 rcl_publisher_t range_l_pub, range_c_pub, range_r_pub;
+rcl_subscription_t twist_sub; 
 
 sensor_msgs__msg__Imu imu_msg;
 sensor_msgs__msg__Range range_msg;
+geometry_msgs__msg__Twist twist_msg;
 
 rclc_executor_t executor;
 rclc_support_t support;
@@ -35,19 +37,35 @@ rcl_timer_t timer;
 
 // --- 상태 변수 ---
 int sonar_state = 0; // 0:Left, 1:Center, 2:Right
+unsigned long last_cmd_time = 0;
 
-// --- 함수: 거리 측정 (Blocking 최소화) ---
+// --- 모터 제어 콜백 ---
+void subscription_callback(const void * msgin) {
+  const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+
+  // 1. Watchdog 갱신 (명령 들어옴!)
+  last_cmd_time = millis();
+
+  // 2. 값 추출
+  float linear_x = msg->linear.x;
+  float angular_z = msg->angular.z;
+
+  // 3. 디버깅 출력
+
+}
+
+// --- 초음파 측정 ---
 float get_distance(int trig, int echo) {
   digitalWrite(trig, LOW);
   delayMicroseconds(2);
   digitalWrite(trig, HIGH);
   delayMicroseconds(10);
   digitalWrite(trig, LOW);
-  
+
   // 30ms 타임아웃 (약 5m)
-  long duration = pulseIn(echo, HIGH, 30000); 
+  long duration = pulseIn(echo, HIGH, 30000);
   if (duration == 0) return -1.0;
-  
+
   // cm -> m 변환
   float dist_m = (duration * 0.034 / 2) / 100.0;
   if (dist_m < 0.2) return -1.0; // 최소 거리 미만 필터링
@@ -62,26 +80,26 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
     // 1. IMU 데이터 퍼블리싱 (매번 수행)
     if (mpu.readSensor()) {
         imu_msg.header.frame_id.data = (char*)"imu_link";
-        
+
         // 시간 동기화는 Agent가 처리하지만, 필요시 여기서 millis() 기반 타임스탬프 추가 가능
-        
+
         // 가속도 (m/s^2)
         imu_msg.linear_acceleration.x = mpu.getAccelX_mss();
         imu_msg.linear_acceleration.y = mpu.getAccelY_mss();
         imu_msg.linear_acceleration.z = mpu.getAccelZ_mss();
-        
+
         // 자이로 (rad/s)
         imu_msg.angular_velocity.x = mpu.getGyroX_rads();
         imu_msg.angular_velocity.y = mpu.getGyroY_rads();
         imu_msg.angular_velocity.z = mpu.getGyroZ_rads();
-        
+
         rcl_publish(&imu_pub, &imu_msg, NULL);
     }
 
     // 2. 초음파 데이터 퍼블리싱 (순차 수행)
     // 한 번 호출될 때마다 센서 하나만 처리하여 딜레이 분산
     float dist = 0.0;
-    
+
     // Range 메시지 공통 설정
     range_msg.radiation_type = sensor_msgs__msg__Range__ULTRASOUND;
     range_msg.field_of_view = 0.52; // 30도
@@ -96,7 +114,7 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
             rcl_publish(&range_l_pub, &range_msg, NULL);
             sonar_state = 1;
             break;
-            
+
         case 1: // Center
             dist = get_distance(TRIG_C, ECHO_C);
             range_msg.header.frame_id.data = (char*)"sonar_center_link";
@@ -104,7 +122,7 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
             rcl_publish(&range_c_pub, &range_msg, NULL);
             sonar_state = 2;
             break;
-            
+
         case 2: // Right
             dist = get_distance(TRIG_R, ECHO_R);
             range_msg.header.frame_id.data = (char*)"sonar_right_link";
@@ -141,16 +159,25 @@ void setup() {
   rclc_publisher_init_default(&range_c_pub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range), "ultrasonic/center");
   rclc_publisher_init_default(&range_r_pub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range), "ultrasonic/right");
 
+  // Subscriber 등록 (/cmd_vel)
+  rclc_subscription_init_default(
+    &twist_sub,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+    "cmd_vel"
+  );
   // 타이머 (20Hz = 50ms)
   // 50ms마다 콜백 실행 -> 초음파는 3번에 1번씩 도니까 150ms(약 6.6Hz) 주기로 갱신됨
   rclc_timer_init_default(&timer, &support, RCL_MS_TO_NS(50), timer_callback);
-  
-  rclc_executor_init(&executor, &support.context, 1, &allocator);
+
+  rclc_executor_init(&executor, &support.context, 5, &allocator);
   rclc_executor_add_timer(&executor, &timer);
+  rclc_executor_add_subscription(&executor, &twist_sub, &twist_msg, &subscription_callback, ON_NEW_DATA);
 }
 
 void loop() {
   // 데이터 송수신 처리
   rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
   delay(10);
+  if (millis() - last_cmd_time > 1000) {}
 }
